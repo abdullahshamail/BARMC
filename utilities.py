@@ -1,200 +1,121 @@
-from hydrogenbond import HydrogenBond
-import numpy as np
 import pandas as pd
+import numpy as np
 
-def printConvoys(convoys):
-    print("Total number of Convoys =", len(convoys))
+def df_convoys(convoys):
+    convoy_data = []
+
+    # Loop through each convoy to collect its information
     for convoy in convoys:
-        print('No of elements in the Convoy', len(convoy.indices))  
-        print(convoy.start_time, convoy.end_time, convoy.indices)
+        # Append a dictionary for each convoy with its start time, end time, and atoms
+        convoy_data.append({
+            'Start': convoy.start_time,
+            'End': convoy.end_time,
+            'HB Atoms': convoy.atoms
+        })
 
-def getAtomType(index):
-    atomTypes = {
-                "hn": [0, 216], 
-                 "n": [216, 432], 
-                 "o": [432, 442], 
-                 "os": [442, 452],
-                 }
-    for atom, range in atomTypes.items():
-        if index >= range[0] and index < range[1]:
-            return atom
+    # Convert the list of dictionaries into a pandas DataFrame
+    convoy_df = pd.DataFrame(convoy_data).sort_values(by='Start').reset_index(drop=True)
+    total = convoy_df['End'] - convoy_df['Start'] + 1
+    print(f"Total: {total.sum()}")
+
+    # Display the DataFrame
+    return convoy_df
+
+def BARMCNaive(results, t1, t2, k):
+
+    # Initialize an empty DataFrame to store relaxed blocks
+    grouped = results.groupby(['H', 'N', 'O'])
+
+    combined_ranges = []
+
+    for _, group in grouped:
+        group = group.sort_values(by='start')
+        combined_start = group.iloc[0]['start']
+        combined_end = group.iloc[0]['end']
+        total_gaps = 0
+
+        for i in range(1, len(group)):
+            gap = group.iloc[i]['start'] - combined_end - 1
+            if gap <= t1:
+                combined_end = group.iloc[i]['end']
+                total_gaps += gap
+            else:
+                sequence_length = combined_end - combined_start + 1
+                if sequence_length > k and (total_gaps / sequence_length) <= t2:
+                    combined_ranges.append((combined_start, combined_end, (group.iloc[0]['H'], group.iloc[0]['N'], group.iloc[0]['O'])))
+                combined_start = group.iloc[i]['start']
+                combined_end = group.iloc[i]['end']
+                total_gaps = 0
+
+        # Check the last combined range after exiting the loop
+        sequence_length = combined_end - combined_start + 1
+        if sequence_length > k and (total_gaps / sequence_length) <= t2:
+            combined_ranges.append((combined_start, combined_end, (group.iloc[0]['H'], group.iloc[0]['N'], group.iloc[0]['O'])))
+
+    # Convert the combined ranges to a DataFrame
+    df_combined_ranges = pd.DataFrame(combined_ranges, columns=['start', 'end', 'Indices'])
+    return df_combined_ranges
+
+def find_consecutive_instances(data, k):
+    # Convert the list of dictionaries to a DataFrame
+    df = pd.DataFrame(data, columns=['Time', 'Condition', 'H', 'N', 'O'])
+
+    # df = pd.DataFrame(data)
     
-    return "none"
+    # Ensure data types are correct
+    df['Time'] = pd.to_numeric(df['Time'], errors='coerce')
+    df['Condition'] = df['Condition'].astype(bool)
+    df['H'] = pd.to_numeric(df['H'], errors='coerce')
+    df['N'] = pd.to_numeric(df['N'], errors='coerce')
+    df['O'] = pd.to_numeric(df['O'], errors='coerce')
 
-def find_key_by_value(input_value, dictionary):
-    for key, value in dictionary.items():
-        if input_value in value:
-            return key
-    return None
+    # Sort data first by H, N, O and then by Time
+    df.sort_values(by=['H', 'N', 'O', 'Time'], inplace=True)
 
+    # Identify consecutive rows where Condition is True and Time is consecutive
+    df['group'] = ((df['H'] != df['H'].shift()) |
+                   (df['N'] != df['N'].shift()) |
+                   (df['O'] != df['O'].shift()) |
+                   (df['Condition'] == False) |
+                   (df['Time'] - df['Time'].shift() != 1)).cumsum()
 
+    # display(df)
+    # Filter out rows where Condition is False
+    df = df[df['Condition']]
 
-def extractInterestingMoleculesPerTimeframe(data, nitrogens_and_oxygens_indices, threshold):
-    results = []  # list to store results
-    for i in range(1, 5):
-        # iterate over second set of subst_id groups
-        for j in range(5, 15):
-            coords_i = data[nitrogens_and_oxygens_indices[i]]
-            coords_j = data[nitrogens_and_oxygens_indices[j]]
-            # compute distances between atoms in the two subst_id groups
-            dists = np.linalg.norm(coords_i[:, np.newaxis, :] - coords_j, axis=2)
-            # find indices of atoms that are within x units of each other
-            idx_i, idx_j = np.where(dists < threshold)
-            # append results to list
-            for ii, jj in zip(idx_i, idx_j):
-                results.append((i, j, ii ,jj))
+    # Group by the new 'group' identifier and get the first and last time
+    grouped = df.groupby('group')
+    result = grouped['Time'].agg(start='min', end='max')
+    result[['H', 'N', 'O']] = grouped[['H', 'N', 'O']].first()
 
-    # print results
+    # Adding a unique identifier column for each block (BAMC Number)
+    result.reset_index(drop=True, inplace=True)
+    result.index.name = 'BAMC'
+    result.reset_index(inplace=True)
+
+    # Reordering columns for clarity
+    result = result[['BAMC', 'start', 'end', 'H', 'N', 'O']]
+    results = result[(result['end'] - result['start'] + 1) >= k]
+
     return results
 
-
-def split_xyz (coords):
-    """
-    Parameters
-    ----------
-    coords : 3D Coordinates
-
-    Returns
-    -------
-    Coordinates on each axis
- 
-    """
-    # Calculate the x coordinates
-    X1 = coords[:,0]
-
-    # Calculate the y coordinates
-    Y1 = coords[:,1]
-
-    # Calculate the z coordinates
-    Z1 = coords[:,2]
-    
-    return X1, Y1, Z1
-
-
-def is_different_atom_set(current, previous):
-    return any(current[1:] != previous[1:])
-
-def BAConvoys(data, k):
-    ranges = []
-
-    # Iterate through the array
-    for i, row in enumerate(data):
-        # Check if the row has HB True
-        if row[0] == True:
-            # Check for the first row or a different atom set
-            if i == 0 or is_different_atom_set(row, data[i-1]):
-                start = i
-            # Check for the last row or a different atom set in the next row
-            if i == len(data) - 1 or (data[i+1][0] == False or is_different_atom_set(row, data[i+1])):
-                end = i
-                if (end - start) >= k:
-                    ranges.append((start, end, row[1:]))
-
-    # Convert the ranges to a DataFrame
-    df_ranges = pd.DataFrame(ranges, columns=['Start', 'End', 'Indices'])
-
-    return df_ranges
-
-
-def consecutive_true_indices(bool_list, k):
-    true_indices = [i for i, x in enumerate(bool_list) if x]
-    consecutive_ranges = []
-    current_range = []
-    for i in range(len(true_indices)):
-        if not current_range:
-            current_range.append(true_indices[i])
-        elif true_indices[i] == current_range[-1] + 1:
-            current_range.append(true_indices[i])
-        else:
-            if len(current_range) >= k:
-                consecutive_ranges.append(current_range)
-            current_range = [true_indices[i]]
-    if current_range and len(current_range) >= k:
-        consecutive_ranges.append(current_range)
-    output_str = ''
-    for r in consecutive_ranges:
-        if len(r) == 1:
-            output_str += str(r[0]) + ', '
-        else:
-            output_str += str(r[0]) + '-' + str(r[-1]) + ', '
-    return output_str[:-2]
-
-def combine_ranges(ranges, t):
-    combined_ranges = []
-    start, end = ranges[0]
-    for i in range(1, len(ranges)):
-        next_start, next_end = ranges[i]
-        if next_start - end <= t:
-            end = next_end
-        else:
-            combined_ranges.append((start, end))
-            start, end = next_start, next_end
-    combined_ranges.append((start, end))
-    return combined_ranges
-
-
 def hydrogenBondCheckGivenIndices(start, end, indices, data, atomType):
-    atomsIHave = {
-                    "n": [],
-                    "hn": [],
-                    "o": []
-                }
-    for index in indices:
-        if not find_key_by_value(index, atomType) == None:
-            atomsIHave[find_key_by_value(index, atomType)].append(index)
+    atomsIHave = hb_atom_types_in_frame(indices, atomType)
 
-    hb = False
-    arr = np.empty(shape=(0, 4))
+    # print(atomsIHave)
+
+    # hb = False
+    arr = np.empty(shape=(0, 5))
     for timeFrame in range(start, end+1):
-
-        for hn in atomsIHave["hn"]:
-            for n in atomsIHave["n"]:
-                coord_hn = getCoordinates(data[timeFrame], hn)
-                coord_n = getCoordinates(data[timeFrame], n)
-                for o in atomsIHave["o"]:
-                    coord_o = getCoordinates(data[timeFrame], o)
-                    if HB_truth(coord_hn, coord_n, coord_o):
-                        hb = True
-
-                        break
-                if hb: break
-            if hb: break
-
-        if hb:
-            arr = np.vstack((arr, np.array([[hb, hn, n, o]])))
+        # print(data[timeFrame].shape)
+        HBAtoms = find_hydrogen_bonds(data[timeFrame], atomsIHave)
+        if HBAtoms == []:
+            arr = np.vstack((arr, np.array([[timeFrame, False, None, None, None]])))
         else:
-            arr = np.vstack((arr, np.array([[hb, None, None, None]])))
-        hb = False
+            # print(timeFrame, HBAtoms)
+            for HBAtom in HBAtoms:
+                arr = np.vstack((arr, np.array([[timeFrame, True, HBAtom[0], HBAtom[1], HBAtom[2]]])))
     return arr
-
-
-def hydrogenBondCheckGivenIndices2(start, end, indices, data, atomType, timeGap):
-    atomsIHave = {
-                    "n": [],
-                    "hn": [],
-                    "o": []
-                }
-    for index in indices:
-        if not find_key_by_value(index, atomType) == None:
-            atomsIHave[find_key_by_value(index, atomType)].append(index)
-
-    tempGap = 0
-    hb = False
-    for timeFrame in range(start, end):
-        for hn in atomsIHave["hn"]:
-                for n in atomsIHave["n"]:
-                    coord_hn = getCoordinates(data[timeFrame], hn)
-                    coord_n = getCoordinates(data[timeFrame], n)
-                    for o in atomsIHave["o"]:
-                        coord_o = getCoordinates(data[timeFrame], o)
-                        if HB_truth(coord_hn, coord_n, coord_o):
-                            # print(start, end, timeFrame, hn, n, o)
-                            # return True
-                            hb = True
-        if tempGap == timeGap  and timeGap != 0: return False
-        tempGap = 0 if hb else tempGap + 1
-    return True if hb else False
-
 
 def calculateAtomTypes(fileLocation):
     df = pd.read_csv(fileLocation)
@@ -214,6 +135,88 @@ def calculateAtomTypes(fileLocation):
 
     return atomType
 
+def hb_atom_types_in_frame(indices, atomType):
+    atomsIHave = {
+            "n": [],
+            "hn": [],
+            "o": []
+        }
+
+    for index in indices:
+        if not find_key_by_value(index, atomType) == None:
+            atomsIHave[find_key_by_value(index, atomType)].append(index)
+
+    return atomsIHave
+
+def compute_angles(vectors_hn_n, vectors_hn_o):
+    """
+    Computes angles between HN-N and HN-O vectors.
+    """
+    # Normalize vectors
+    norm_hn_n = np.linalg.norm(vectors_hn_n, axis=1, keepdims=True)
+    norm_hn_o = np.linalg.norm(vectors_hn_o, axis=1, keepdims=True)
+    unit_hn_n = vectors_hn_n / norm_hn_n
+    unit_hn_o = vectors_hn_o / norm_hn_o
+
+    # Dot product and angle
+    dot_product = np.sum(unit_hn_n * unit_hn_o, axis=1)
+    angles = np.arccos(np.clip(dot_product, -1.0, 1.0))
+    return angles
+
+def find_hydrogen_bonds(data, atomsIHave):
+    hn_indices = np.array(atomsIHave['hn'])
+    n_indices = np.array(atomsIHave['n'])
+    o_indices = np.array(atomsIHave['o'])
+
+    if len(hn_indices) == 0 or len(n_indices) == 0 or len(o_indices) == 0:
+        return []
+
+    # Compute distances between N and O, and get displacement vectors
+    distances_n_o, vectors_n_o = get_vectorized_distances(data, n_indices, o_indices)
+    n_o_candidate_mask = distances_n_o <= 3.5
+    
+    valid_hbonds = []
+    
+    # Iterate through N-O pairs that meet the distance criteria
+    for n_idx, o_idx in zip(*np.where(n_o_candidate_mask)):
+        n_coord = data[n_indices[n_idx]]
+        o_coord = data[o_indices[o_idx]]
+
+        # For each N-O pair, find the corresponding H atoms
+        for hn_idx in hn_indices:
+            hn_coord = data[hn_idx]
+
+            # Compute vectors
+            vector_hn_n = n_coord - hn_coord
+            vector_hn_o = o_coord - hn_coord
+
+            # Calculate angle
+            angle = compute_angles(vector_hn_n[np.newaxis, :], vector_hn_o[np.newaxis, :])[0]
+
+            # Check angle criteria
+            if 2.35619 < angle <= 3.14159:
+                valid_hbonds.append([hn_idx, n_indices[n_idx], o_indices[o_idx]])
+
+    return valid_hbonds
+
+def find_key_by_value(input_value, dictionary):
+    for key, value in dictionary.items():
+        if input_value in value:
+            return key
+    return None
+
+def get_vectorized_distances(data, indices_a, indices_b):
+    """
+    Computes vectorized distances between two sets of atoms, considering periodic boundaries.
+    """
+    coords_a = data[indices_a][:, np.newaxis, :]  # Shape: (len(indices_a), 1, 3)
+    coords_b = data[indices_b]                    # Shape: (len(indices_b), 3)
+    diff = coords_a - coords_b
+    box_size = 72.475
+    diff -= box_size * np.round(diff / box_size)  # Apply periodic boundary conditions
+    distances = np.sqrt(np.sum(diff**2, axis=2))
+    return distances, diff
+
 def filterDF(df):
     osDF = df[((df['atom_type'] == 'o') | (df['atom_type'] == 'os')) & (df['subst_id'] >= 5) & (df['subst_id'] <= 14)]
     nDF = df[(df['atom_type'] == 'n') & (df['subst_id'] >= 1) & (df['subst_id'] <= 4)]
@@ -226,182 +229,53 @@ def filterDF(df):
 
     return o_and_n_indices
 
+def hb_atom_types_in_data(allInfo):
+    n_atoms = allInfo[(allInfo['atom_type'] == 'n') & (allInfo['subst_id'] >= 1) & (allInfo['subst_id'] <= 4)].index.tolist()
+    hn_atoms = allInfo[(allInfo['atom_type'] == 'hn') & (allInfo['subst_id'] >= 1) & (allInfo['subst_id'] <= 4)].index.tolist()
 
-def getAtomTypesFromArray(indices):
-    returnDict = {}
-    atomTypes = {
-                "hn": [0, 216], 
-                 "n": [216, 432], 
-                 "o": [432, 442], 
-                 "os": [442, 452],
-                 }
-    for atom, range in atomTypes.items():
-        returnDict[atom] = indices[(indices >= range[0]) & (indices < range[1])]
-    return returnDict
+    # get indices of atoms with atom_type 'o' or 'os' and subst_id between 5-14
+    o_atoms = allInfo[((allInfo['atom_type'] == 'o') | (allInfo['atom_type'] == 'os')) & (allInfo['subst_id'] >= 5) & (allInfo['subst_id'] <= 14)].index.tolist()
 
-def getCoordinates(data, index):
-    return data[index]
+    atomType = {
+        "n": n_atoms,
+        "hn": hn_atoms,
+        "o": o_atoms
+    }
 
-def coordinate_transform (x):
-    x = 72.475 + x  if x < 0 else x
-    return x
+    return atomType
 
-def periodic_boundary (x1, x2):
 
-    """
-    Apply periodic boundaries
-    Periodic Boundaries in X and Y direction is 72 A.
-    Z axis does not have any periodic boundary
+def extract_semi_vectorized(data, nitrogens_and_oxygens_indices, threshold):
+    # Existing setup remains unchanged
+    coords_i = np.vstack([data[nitrogens_and_oxygens_indices[i]] for i in range(1, 5)])
+    coords_j = np.vstack([data[nitrogens_and_oxygens_indices[j]] for j in range(5, 15)])
     
-    So, the periodicity conditions
-
-    Difference in X axis = if |x2 − x1|> 36:
-                                72 −|x2 − x1|
-                            
-                         else:
-                                x2 − x1
+    offsets_i = np.cumsum([0] + [len(nitrogens_and_oxygens_indices[i]) for i in range(1, 5)])
+    offsets_j = np.cumsum([0] + [len(nitrogens_and_oxygens_indices[j]) for j in range(5, 15)])
     
-    Difference in Y axis = same as X
-
-    Parameters
-    ----------
-    x1 : axis coordinates of atom 1  
-    x2 : axis coordinates of atom 2 
-
-    Returns
-    -------
-    differences of coordinates values with periodicity
-
-    """
+    dists = np.sqrt(np.sum((coords_i[:, np.newaxis, :] - coords_j[np.newaxis, :, :]) ** 2, axis=-1))
     
-    x1 = coordinate_transform (x1)
+    idx_i, idx_j = np.where(dists < threshold)
+
+    # Vectorize mapping back to original groups
+    # Create an array where each element's value is its group number
+    group_map_i = np.zeros(len(coords_i), dtype=int)
+    for i, offset in enumerate(offsets_i[:-1], start=1):
+        group_map_i[offsets_i[i-1]:offsets_i[i]] = i
     
-    x2 = coordinate_transform (x2)
-
-    coord_diff = ((x2 - x1)/abs(x2 - x1))*(72.475-abs(x2 - x1)) if abs(x2 - x1)>36.2375 else (x2 - x1)
+    group_map_j = np.zeros(len(coords_j), dtype=int)
+    for j, offset in enumerate(offsets_j[:-1], start=5):
+        group_map_j[offsets_j[j-5]:offsets_j[j-5+1]] = j
     
-    return coord_diff
+    # Use the group_map arrays to find the original group for each index
+    orig_i = group_map_i[idx_i]
+    orig_j = group_map_j[idx_j]
 
-def distance_periodicity (atom1, atom2):
-    
-    """
-    Apply periodic boundaries
-    
-    Periodic Boundaries in X and Y direction is 72 A.
-    Z axis does not have any periodic boundary
-    
-    So, the periodicity conditions
+    # Calculate relative indices within each group
+    ii_rel = idx_i - np.searchsorted(offsets_i, idx_i, side='right') + 1
+    jj_rel = idx_j - np.searchsorted(offsets_j, idx_j, side='right') + 5
 
-    Distance in X axis = if |x2 − x1|> 36:
-                                72 −|x2 − x1|
-                            
-                         else:
-                                x2 − x1
-    
-    Distance in Y axis = same as X
-    
-    Euclidean Shortest Distance = √(〖"(Distance in X axis)" 〗^2+〖"(Distance in Y axis)" 〗^2+〖"(Distance in Z axis)" 〗^2 )
+    # Compile results (vectorized)
+    results = np.vstack((orig_i, orig_j, ii_rel, jj_rel)).T
 
-    Parameters
-    ----------
-    X1 : Numpy 1D array
-        x axis coordinates of atom 1 trajectory
-    Y1 : Numpy 1D array
-        y axis coordinates of atom 1 trajectory 
-    Z1 : Numpy 1D array
-        z axis coordinates of atom 1 trajectory 
-    X2 : Numpy 1D array
-        x axis coordinates of atom 2 trajectory 
-    Y2 : Numpy 1D array
-        y axis coordinates of atom 2 trajectory 
-    Z2 : Numpy 1D array
-        z axis coordinates of atom 2 trajectory 
-
-    Returns
-    -------
-    distance: Numpy 1D array
-            Euclidean distance of (X1,Y1,Z1) and (X2,Y2,Z2)
-
-    """
-
-    x_coord_diff = periodic_boundary (atom1[0], atom2[0])
-        
-    y_coord_diff = periodic_boundary (atom1[1], atom2[1])
-
-    z_coord_diff = (atom2[2]-atom1[2])
-
-    euclidean_distance = np.sqrt(np.square(x_coord_diff) + np.square(y_coord_diff) + np.square(z_coord_diff))
-    
-    return euclidean_distance, x_coord_diff, y_coord_diff, z_coord_diff
-
-
-def calc_angle (vector1,vector2):
-    
-    """ Returns the angle between two vectors  """ 
-    
-    c = np.dot(vector1,vector2) / (np.linalg.norm(vector1)* np.linalg.norm(vector2))
-#     angle = np.arccos(np.clip(c, -1 , 1))
-    angle = np.arccos(c)
-    return angle
-
-
-def HB_truth(hn, n, o):
-    euclidean_distance_no, x_coord_diff_no, y_coord_diff_no, z_coord_diff_no = distance_periodicity(n, o)
-    euclidean_distance_hnn, x_coord_diff_hnn, y_coord_diff_hnn, z_coord_diff_hnn = distance_periodicity(hn, n)
-    euclidean_distance_hno, x_coord_diff_hno, y_coord_diff_hno, z_coord_diff_hno = distance_periodicity(hn, o)
-    
-    vector_hnn = [x_coord_diff_hnn, y_coord_diff_hnn, z_coord_diff_hnn]
-    vector_hno = [x_coord_diff_hno, y_coord_diff_hno, z_coord_diff_hno]
-
-    angle = calc_angle(vector_hno, vector_hnn)
-
-    # print(angle)
-
-    if (angle > 2.35619) and  (angle <= 3.14159) and euclidean_distance_no <= 3.5:
-        return True
-    return False
-
-def getHBinformation(timeframeCoordinates, cluster, timeframeNumber): #return the HB information for a single cluster
-    atomArrays = getAtomTypesFromArray(cluster.indices)
-
-    for hn in atomArrays["hn"]:
-        for n in atomArrays["n"]:
-            coord_hn = getCoordinates(timeframeCoordinates, hn)
-            coord_n = getCoordinates(timeframeCoordinates, n)
-            for o in atomArrays["o"]:
-                coord_o = getCoordinates(timeframeCoordinates, o)
-                if HB_truth(coord_hn, coord_n, coord_o):
-                    cluster.hb_list.append(HydrogenBond(hn, coord_hn, n, coord_n, o, coord_o, timeframeNumber, "o"))
-                    cluster.hb_present = True
-                    cluster.totalHB += 1
-            for os in atomArrays["os"]:
-                coord_os = getCoordinates(timeframeCoordinates, os)
-                if HB_truth(coord_hn, coord_n, coord_os):
-                    cluster.hb_list.append(HydrogenBond(hn, coord_hn, n, coord_n, os, coord_os, timeframeNumber, "os"))
-                    cluster.hb_present = True
-                    cluster.totalHB += 1
-    return cluster
-
-
-def getHBinformationGivenIndices(timeframeCoordinates, indices, timeframeNumber): #return the HB information for a single cluster
-    atomArrays = getAtomTypesFromArray(indices)
-    HBs = []
-    presence = False
-
-    for hn in atomArrays["hn"]:
-        for n in atomArrays["n"]:
-            coord_hn = getCoordinates(timeframeCoordinates, hn)
-            coord_n = getCoordinates(timeframeCoordinates, n)
-            for o in atomArrays["o"]:
-                coord_o = getCoordinates(timeframeCoordinates, o)
-                if HB_truth(coord_hn, coord_n, coord_o):
-                    HBs.append(HydrogenBond(hn, coord_hn, n, coord_n, o, coord_o, timeframeNumber, "o"))
-                    presence = True
-            for os in atomArrays["os"]:
-                coord_os = getCoordinates(timeframeCoordinates, os)
-                if HB_truth(coord_hn, coord_n, coord_os):
-                    HBs.append(HydrogenBond(hn, coord_hn, n, coord_n, os, coord_os, timeframeNumber, "os"))
-                    presence = True
-    return presence, HBs
-
-
+    return results.tolist()

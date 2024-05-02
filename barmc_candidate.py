@@ -1,13 +1,15 @@
-class BARMCCandidate(object):
-    __slots__ = ('indices', 'is_assigned', '_start_time', '_end_time', '_gap', '_gaps', '_totalGaps')
+class BARMC_Candidate(object):
+    __slots__ = ('indices', 'is_assigned', '_start_time', '_end_time', '_gap', '_gaps', '_totalGaps', "atoms", "is_cluster_assigned")
 
-    def __init__(self, indices, is_assigned, start_time=0, end_time=0, gap=0, gaps=0):
+    def __init__(self, indices, is_assigned, start_time=0, end_time=0, gap=0, gaps=0, atoms = None, is_cluster_assigned = 0):
         self.indices = indices
         self.is_assigned = is_assigned
         self._start_time = start_time
         self._end_time = end_time
         self._gap = gap
         self._gaps = gaps
+        self.atoms = atoms
+        self.is_cluster_assigned = is_cluster_assigned
 
     @property
     def start_time(self):
@@ -50,10 +52,10 @@ class BARMCCandidate(object):
         return self._gaps / self.totalLength if self.totalLength != 0 else 0
 
     def __repr__(self):
-        return f'<{self.__class__.__name__} {id(self)} indices={self.indices}, is_assigned={self.is_assigned}, start_time={self.start_time}, end_time={self.end_time}, gap={self.gap}, totalGaps={self.totalGaps}>'
+        return f'<{self.__class__.__name__} {id(self)} indices={self.indices}, is_assigned={self.is_assigned}, start_time={self.start_time}, end_time={self.end_time}, gap={self.gap}, totalGaps={self.totalGaps}, is_cluster_assigned={self.is_cluster_assigned}>'
 
     def __eq__(self, other):
-        if isinstance(other, BAGCandidate):
+        if isinstance(other, BARMC_Candidate):
             # Compare sorted tuples of indices for consistency
             return (self.start_time, self.end_time, tuple(sorted(self.indices))) == \
                    (other.start_time, other.end_time, tuple(sorted(other.indices)))

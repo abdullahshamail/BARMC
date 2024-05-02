@@ -1,4 +1,4 @@
-from barmccandidate import BARMCandidate
+from barmc_candidate import BARMC_Candidate
 import copy
 class CMC(object):
     """Coherence Moving Cluster (CMC) algorithm
@@ -25,7 +25,7 @@ class CMC(object):
                 continue
             clusters = self.clf.fit_predict(values, y=y, sample_weight=sample_weight)
             unique_clusters = set(clusters)
-            clusters_indices = dict((cluster, BARMCCandidate(indices=set(), is_assigned=False, start_time=None, end_time=None)) for cluster in unique_clusters)
+            clusters_indices = dict((cluster, BARMC_Candidate(indices=set(), is_assigned=False, start_time=None, end_time=None)) for cluster in unique_clusters)
 
             for index, cluster_assignment in enumerate(clusters):
                 clusters_indices[cluster_assignment].indices.add(index)
