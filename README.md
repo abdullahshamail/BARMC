@@ -12,4 +12,4 @@ pip install numpy pandas scikit-learn
 
 # Datasets
 
-> Presently, we only provide a small sample of the dataset used. Since the data was obtained from our collaborators working on Molecular Dynamics Simulation from other Universities - please send us a formal request via email and we will promptly respond and provide it.
+Presently, we only provide a small sample of the dataset used. Since the data was obtained from our collaborators working on Molecular Dynamics Simulation from other Universities - please send us a formal request via email and we will promptly respond and provide it.
